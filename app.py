@@ -7,7 +7,7 @@ import procesamiento as proc
 
 st.set_page_config(page_title=f"Torre de control WMS · {cfg.CD_NOMBRE}", page_icon="🏭", layout="wide")
 
-VERDE = "#1F5F4A"
+VERDE = "#174A39"
 COLORES_TIPO = {"Normal": "#9DB8AE", "Espera": "#E0A526", "Pausa": "#C4452F", "Colación": "#8A8F98"}
 COLORES_GRUA = {"No dirigido": "#C4452F", "Reabastecimiento dirigido": VERDE,
                 "Recogida almacenamiento": "#6F8FAF", "Otro": "#B8BDC4"}
