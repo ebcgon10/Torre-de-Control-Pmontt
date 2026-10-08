@@ -143,7 +143,7 @@ with st.sidebar:
         factor_pallet = (arch_factor.getvalue(), arch_factor.name) if arch_factor else None
 
 st.title("Torre de control WMS")
-st.caption(f"{cfg.CD_NOMBRE} · Turno {', '.join(cfg.TURNOS_ANALIZADOS)} (22:00 a 08:00; el turno parte con la primera lista de picking manual)")
+st.caption(f"{cfg.CD_NOMBRE} · Turno {', '.join(cfg.TURNOS_ANALIZADOS)}")
 
 if not contenidos_pick:
     st.info("No hay archivos de picking. Sube uno o más CAJA_PICKEADA en la barra lateral, "
