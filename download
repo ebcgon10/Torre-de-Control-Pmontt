@@ -1,0 +1,6 @@
+   *.csv
+   *.xlsx
+   *.xls
+   *.parquet
+   .streamlit/secrets.toml
+   __pycache__/
