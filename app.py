@@ -22,7 +22,13 @@ def cargar_picking(contenidos: tuple):
     df = pd.concat([proc.leer_csv(c) for c in contenidos], ignore_index=True)
     listas, exclusiones, avisos, totales = proc.preparar_picking(df)
     brechas = proc.calcular_brechas(listas)
-    return listas, brechas, exclusiones, avisos, proc.preparar_lpns(df), totales
+    lpns = proc.preparar_lpns(df)
+    if lpns is not None:  # mismo turno y fecha que su lista (incluye la extensión del turno)
+        mapa = listas.set_index("id_de_lista")[["turno", "fecha_op"]]
+        en = lpns["id_de_lista"].isin(mapa.index)
+        lpns.loc[en, "turno"] = lpns.loc[en, "id_de_lista"].map(mapa["turno"])
+        lpns.loc[en, "fecha_op"] = lpns.loc[en, "id_de_lista"].map(mapa["fecha_op"])
+    return listas, brechas, exclusiones, avisos, lpns, totales
 
 
 @st.cache_data(show_spinner="Procesando movimientos de grúa...")
@@ -59,12 +65,15 @@ def bajar_drive(credenciales_json, archivo_id, modificado):
 
 
 @st.cache_data(show_spinner="Analizando posiciones de picking...")
-def cargar_posiciones(ventas: tuple, maestro: bytes, factor: tuple | None):
+def cargar_posiciones(ventas: tuple, maestro: bytes | None, factor: tuple | None):
     import posiciones as pos
     v = pd.concat([pos.leer_tabla(b, n, columnas=pos.COLS_VENTA) for b, n in ventas], ignore_index=True)
     v = pos.preparar_venta(v.drop_duplicates(subset=["documento material", "material"]))
-    f = pos.leer_factor_pallet(*factor) if factor else None
-    r, dias = pos.analizar(v, pos.leer_maestro(maestro), f)
+    import maestro_adc
+    # Sin ADC ni cajas por pallet en Drive se usan los del ADC de Puerto Montt embebidos en la app
+    f = pos.leer_factor_pallet(*factor) if factor else maestro_adc.cajas_por_pallet()
+    m = pos.leer_maestro(maestro) if maestro is not None else maestro_adc.posiciones()
+    r, dias = pos.analizar(v, m, f)
     esperado = pos.pallet_esperado(v, f) if f is not None else None
     return r, pos.resumen_zonas(r), dias.min(), dias.max(), len(dias), esperado
 
@@ -115,7 +124,7 @@ with st.sidebar:
         if carpetas_ok:
             st.caption(f"{cfg.CD_NOMBRE if hasattr(cfg, 'CD_NOMBRE') else ''} · carpetas: {', '.join(cfg.CARPETAS_DRIVE)}")
         st.caption(f"En Drive: {len(a_pick)} de picking, {len(a_grua)} de grúa, {len(a_venta)} de venta, "
-                   f"{len(a_maestro)} ADC y {len(a_factor)} de cajas por pallet. "
+                   f"ADC y cajas por pallet: {'Drive' if a_maestro else 'incluidos en la app'}. "
                    "La lista se refresca sola cada hora o con el botón.")
         with st.expander("Ver archivos"):
             for f in todos:
@@ -246,7 +255,7 @@ if lpns is not None:
 import posiciones as posmod
 det = None
 error_pos = None
-if contenidos_venta and contenido_maestro is not None:
+if contenidos_venta:
     try:
         det, zonas_pos, v_desde, v_hasta, n_dias, esperado = cargar_posiciones(
             contenidos_venta, contenido_maestro, factor_pallet)
@@ -535,15 +544,13 @@ with tab_rep:
         if error_pos:
             st.error(error_pos)
         elif det is None:
-            st.info("Para esta sección deja en Drive (o sube) el archivo de venta, con 'VENTA' en el nombre, y el "
-                    "ADC de Puerto Montt (con 'ADC' en el nombre).")
+            st.info("Para esta sección deja en VENTAS MENSUALES PMONTT el archivo de venta de SAP, con 'VENTA' en el "
+                    "nombre. El ADC y las cajas por pallet ya vienen incluidos en la app.")
         else:
             st.caption(f"Venta del {v_desde:%d/%m/%Y} al {v_hasta:%d/%m/%Y} ({n_dias} días operativos). No depende "
                        f"del filtro de fecha. Día alto = percentil {cfg.PERCENTIL_DIA_ALTO:.0%} de la venta diaria de "
-                       "cada SKU; capacidad en cajas." + (" Se descuentan las cajas que salen como pallet completo."
-                                                         if factor_pallet else ""))
-            if not factor_pallet:
-                st.warning("Falta el archivo de cajas por pallet: los SKUs con pedidos grandes aparecen más críticos.")
+                       "cada SKU; capacidad en cajas. Se descuentan las cajas que salen como pallet completo "
+                       "(cajas por pallet del ADC, pestaña 23-Huellas).")
             res_d = posmod.resumen_diagnostico(det)
             tabla(res_d, column_config={
                 "diagnostico": "Diagnóstico", "skus": "SKUs", "skus_a": "Clase A",

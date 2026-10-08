@@ -73,6 +73,37 @@ def asignar_turno(ts: pd.Series):
     return turno, fecha_op
 
 
+def extender_turno(listas: pd.DataFrame) -> int:
+    """Si un operario sigue pickeando después del fin de su turno (ej. el TC termina a las 09:30
+    en vez de las 08:00), esas listas siguen siendo de su turno mientras no corte más de
+    CONTINUIDAD_TURNO_MIN entre listas, hasta EXTENSION_MAX_MIN pasado el fin de turno.
+    Modifica listas en el lugar y devuelve cuántas listas cambiaron de turno."""
+    cont = getattr(cfg, "CONTINUIDAD_TURNO_MIN", 0)
+    ext_max = getattr(cfg, "EXTENSION_MAX_MIN", 0)
+    if not cont or listas.empty:
+        return 0
+    fin_turno = {t: _minutos(f) for t, _, f in cfg.TURNOS}
+    cambios = 0
+    for _, idx in listas.sort_values("inicio").groupby("usuario").groups.items():
+        orden = listas.loc[idx].sort_values("inicio").index
+        prev = None
+        for i in orden:
+            if prev is not None and listas.at[i, "turno"] != listas.at[prev, "turno"]:
+                t_prev = listas.at[prev, "turno"]
+                hueco = (listas.at[i, "inicio"] - listas.at[prev, "termino"]).total_seconds() / 60
+                # fin del turno anterior en fecha-hora (el TC termina el mismo día de su fecha operativa)
+                limite = listas.at[prev, "fecha_op"] + pd.Timedelta(minutes=fin_turno.get(t_prev, 0))
+                if limite <= listas.at[prev, "inicio"] - pd.Timedelta(hours=12):
+                    limite += pd.Timedelta(days=1)
+                pasado = (listas.at[i, "inicio"] - limite).total_seconds() / 60
+                if hueco <= cont and 0 <= pasado <= ext_max:
+                    listas.at[i, "turno"] = t_prev
+                    listas.at[i, "fecha_op"] = listas.at[prev, "fecha_op"]
+                    cambios += 1
+            prev = i
+    return cambios
+
+
 # ---------------------------------------------------------------- picking
 
 MANUAL, PALLET = "Manual", "Pallet completo"
@@ -180,6 +211,11 @@ def preparar_picking(df: pd.DataFrame):
                       "por el nombre de la zona (config.PREFIJOS_PALLET_COMPLETO).")
     listas["tipo_picking"] = np.where(listas["lpns_pallet"] > listas["lpns"] / 2, PALLET, MANUAL)
     listas["turno"], listas["fecha_op"] = asignar_turno(listas["inicio"])
+    n_ext = extender_turno(listas)
+    if n_ext:
+        avisos.append(f"{n_ext} listas empezaron después del fin de turno pero son continuación del picking del "
+                      f"mismo operario (menos de {cfg.CONTINUIDAD_TURNO_MIN} min desde su lista anterior): "
+                      "se cuentan en el turno en que venía pickeando.")
     n_sin = int((listas["turno"] == "Sin turno").sum())
     if n_sin:
         avisos.append(f"{n_sin} listas empiezan fuera de los turnos definidos en config.py.")
