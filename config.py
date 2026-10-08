@@ -20,11 +20,10 @@ TURNOS = [
 # empezó (False). Con True, lo pickeado a las 23:00 del 07/10 cuenta en el TC del 08/10.
 FECHA_OPERATIVA_AL_TERMINO = True
 
-# Si el picking del turno se alarga (ej. el TC termina a las 09:30), las listas que un operario
-# empieza después del fin de turno siguen contando en su turno mientras no corte más de estos
-# minutos entre una lista y la siguiente, y hasta EXTENSION_MAX_MIN pasado el fin de turno.
+# El turno dura hasta que se termina de pickear todo (ej. el TC termina a las 09:30 y no a las
+# 08:00): las listas que empiezan después de la hora de fin siguen contando en el turno mientras
+# el CD no quede más de estos minutos sin ninguna lista en curso. Ese primer corte es el fin real.
 CONTINUIDAD_TURNO_MIN = 30
-EXTENSION_MAX_MIN = 240
 
 # Nombres de archivo que la app busca en Drive (en mayúsculas, basta con que el nombre lo contenga)
 PATRON_PICKING = "CAJA_PICKEADA"
