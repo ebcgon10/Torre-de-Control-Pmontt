@@ -4,7 +4,7 @@
 CD_NOMBRE = "CD Puerto Montt"
 
 # Meta de productividad sobre tiempo total (cajas por hora-hombre)
-META_ICEO = 240
+META_ICEO = 267
 
 # Turnos: (nombre, hora inicio, hora fin). En Puerto Montt el TC parte a las 22:00 del día
 # anterior, porque se empieza a pickear cerca de las 23:00. El TB termina a las 22:00.
