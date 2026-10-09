@@ -29,6 +29,13 @@ CONTINUIDAD_TURNO_MIN = 30
 PATRON_PICKING = "CAJA_PICKEADA"
 PATRON_GRUA = "MOVIMIENTO_DE_GRUA"
 
+# Informe diario (PDF): cuadratura de venta y pedidos cortados del WMS. Cada descarga trae el día
+# del picking y el siguiente; la app usa la fecha del picking (y para cada fecha, el archivo más nuevo).
+PATRON_CUADRATURA = "CUADRATURA_DE_VENTA"
+PATRON_CORTADOS = "PEDIDOS_CORTADOS"
+ALMACEN = "PMONTT"                        # filtra la columna de almacén de esos archivos
+DIAS_GRAFICO_INFORME = 7                  # días que muestra el gráfico de rendimiento del PDF
+
 # LPN de surtido (nivel S) de un solo artículo con al menos estas cajas se consideran
 # "pallets armados en surtido" (debieron salir como pallet completo desde almacenamiento)
 UMBRAL_LPN_CASI_PALLET = 50

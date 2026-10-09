@@ -31,6 +31,12 @@ def cargar_picking(contenidos: tuple):
     return listas, brechas, exclusiones, avisos, lpns, totales
 
 
+@st.cache_data(show_spinner="Leyendo cuadratura de venta...")
+def cargar_cuadratura(cuad: tuple, cort: tuple):
+    import informe_pdf
+    return informe_pdf.leer_cuadratura(cuad), informe_pdf.leer_cortados(cort)
+
+
 @st.cache_data(show_spinner="Procesando movimientos de grúa...")
 def cargar_grua(contenidos: tuple):
     df = pd.concat([proc.leer_csv(c) for c in contenidos], ignore_index=True)
@@ -84,6 +90,7 @@ def nombre_norm(nombre):
 
 conf_drive = secretos_drive()
 contenidos_pick, contenidos_grua, contenidos_venta, contenido_maestro, factor_pallet = (), (), (), None, None
+contenidos_cuad, contenidos_cort = (), ()
 
 with st.sidebar:
     st.header("Datos")
@@ -110,12 +117,20 @@ with st.sidebar:
                             and f["name"].lower().endswith(".xlsx")], key=lambda f: f["modifiedTime"])[-1:]
         a_factor = sorted([f for f in archivos if nombre_norm(cfg.PATRON_FACTOR_PALLET) in nombre_norm(f["name"])],
                           key=lambda f: f["modifiedTime"])[-1:]
-        a_venta = [f for f in a_venta if f not in a_factor]
-        todos = a_pick + a_grua + a_venta + a_maestro + a_factor
+        por_fecha = lambda lst: sorted(lst, key=lambda f: f["modifiedTime"])
+        a_cuad = por_fecha([f for f in archivos if nombre_norm(cfg.PATRON_CUADRATURA) in nombre_norm(f["name"])
+                            and es_csv(f)])
+        a_cort = por_fecha([f for f in archivos if nombre_norm(cfg.PATRON_CORTADOS) in nombre_norm(f["name"])
+                            and es_csv(f)])
+        # La cuadratura también tiene "VENTA" en el nombre: no es la venta de SAP para posiciones
+        a_venta = [f for f in a_venta if f not in a_factor and f not in a_cuad]
+        todos = a_pick + a_grua + a_venta + a_maestro + a_factor + a_cuad + a_cort
         with st.spinner(f"Descargando {len(todos)} archivos..."):
             contenidos_pick = tuple(bajar_drive(cred, f["id"], f["modifiedTime"]) for f in a_pick)
             contenidos_grua = tuple(bajar_drive(cred, f["id"], f["modifiedTime"]) for f in a_grua)
             contenidos_venta = tuple((bajar_drive(cred, f["id"], f["modifiedTime"]), f["name"]) for f in a_venta)
+            contenidos_cuad = tuple(bajar_drive(cred, f["id"], f["modifiedTime"]) for f in a_cuad)
+            contenidos_cort = tuple(bajar_drive(cred, f["id"], f["modifiedTime"]) for f in a_cort)
             if a_maestro:
                 contenido_maestro = bajar_drive(cred, a_maestro[0]["id"], a_maestro[0]["modifiedTime"])
             if a_factor:
@@ -124,6 +139,7 @@ with st.sidebar:
         if carpetas_ok:
             st.caption(f"{cfg.CD_NOMBRE if hasattr(cfg, 'CD_NOMBRE') else ''} · carpetas: {', '.join(cfg.CARPETAS_DRIVE)}")
         st.caption(f"En Drive: {len(a_pick)} de picking, {len(a_grua)} de grúa, {len(a_venta)} de venta, "
+                   f"{len(a_cuad)} de cuadratura y {len(a_cort)} de pedidos cortados, "
                    f"ADC y cajas por pallet: {'Drive' if a_maestro else 'incluidos en la app'}. "
                    "La lista se refresca sola cada hora o con el botón.")
         with st.expander("Ver archivos"):
@@ -141,6 +157,10 @@ with st.sidebar:
         contenido_maestro = arch_maestro.getvalue() if arch_maestro else None
         arch_factor = st.file_uploader("Cajas por pallet (CAJAS_X_PALLET)", type=["csv", "xlsx"])
         factor_pallet = (arch_factor.getvalue(), arch_factor.name) if arch_factor else None
+        arch_cuad = st.file_uploader("Cuadratura de venta (informe diario)", type="csv", accept_multiple_files=True)
+        arch_cort = st.file_uploader("Pedidos cortados (informe diario)", type="csv", accept_multiple_files=True)
+        contenidos_cuad = tuple(f.getvalue() for f in arch_cuad or [])
+        contenidos_cort = tuple(f.getvalue() for f in arch_cort or [])
 
 st.title("Torre de control WMS")
 st.caption(f"{cfg.CD_NOMBRE} · Turno {', '.join(cfg.TURNOS_ANALIZADOS)}")
@@ -302,11 +322,86 @@ if excl_total:
     alertas.append(("warning", "Calidad de datos",
                     f"{excl_total} registros excluidos del archivo de picking (ver detalle en Calidad de datos)."))
 
+# ---------------------------------------------------------------- venta del día e informe PDF
+venta_dia, error_cuad = None, None
+if desde == hasta and contenidos_cuad:
+    try:
+        import informe_pdf
+        cuad, cort = cargar_cuadratura(contenidos_cuad, contenidos_cort)
+        venta_dia = informe_pdf.resumen_venta(
+            cuad, cort if contenidos_cort else None, desde,
+            turnos["cajas_manual"].sum() + turnos["cajas_pallet"].sum())
+    except ValueError as e:
+        error_cuad = str(e)
+
+
+def armar_informe():
+    import informe_pdf
+    hh = turnos["horas_hombre"].sum()
+    h_ef = turnos["min_manual"].sum() / 60
+    cj = turnos["cajas_manual"].sum()
+    cj_pal = turnos["cajas_pallet"].sum()
+    kpi = {"cajas": cj, "operarios": int(L_man["usuario"].nunique()),
+           "cj_hh_total": cj / hh if hh else 0, "cj_hh_efectiva": cj / h_ef if h_ef else 0,
+           "tiempo_listas": h_ef / hh if hh else 0, "cajas_pallet": cj_pal,
+           "pallets": turnos["lpns_pallet"].sum(), "pct_pallet": cj_pal / (cj + cj_pal) if cj + cj_pal else 0,
+           "operarios_pallet": int(L_pal["usuario"].nunique())}
+    h = turnos_hist[turnos_hist["fecha_op"] <= desde].groupby("fecha_op").agg(
+        cajas=("cajas_manual", "sum"), hh=("horas_hombre", "sum"), mef=("min_manual", "sum")).tail(
+        cfg.DIAS_GRAFICO_INFORME).reset_index()
+    h["total"] = h["cajas"] / h["hh"]
+    h["efectiva"] = h["cajas"] / (h["mef"] / 60)
+    h["x"] = h["fecha_op"].dt.strftime("%d/%m")
+    return pdf_cacheado(desde, turnos.iloc[0], h, operarios, zonas, kpi, venta_dia)
+
+
+@st.cache_data(show_spinner="Armando informe PDF...", max_entries=20)
+def pdf_cacheado(fecha, turno, hist, ops, zon, kpi, venta):
+    # en caché para no redibujar el PDF cada vez que se toca un filtro
+    import informe_pdf
+    return informe_pdf.generar(fecha, turno, hist, ops, zon, kpi, venta)
+
+
+with st.sidebar:
+    st.header("Informe diario")
+    if desde != hasta:
+        st.caption("Elige Período = Día para descargar el informe PDF de ese turno.")
+    elif len(turnos) != 1:
+        st.caption("No hay un turno único para la fecha elegida.")
+    else:
+        if error_cuad:
+            st.error(f"Cuadratura de venta: {error_cuad}")
+        elif not contenidos_cuad:
+            st.caption("Sin archivo CUADRATURA_DE_VENTA: el informe saldrá sin venta ni cortes.")
+        elif venta_dia is None:
+            st.warning(f"La cuadratura cargada no trae venta del {desde:%d/%m/%Y}.")
+        try:
+            st.download_button("Descargar informe PDF", armar_informe(), type="primary",
+                               file_name=f"Informe_picking_PMONTT_{desde:%Y-%m-%d}.pdf",
+                               mime="application/pdf", use_container_width=True)
+        except Exception as e:  # el informe nunca debe botar la app
+            st.error(f"No pude generar el PDF: {e}")
+
 tab_res, tab_rep = st.tabs(["Resumen", f"Reportes ({len(alertas)} alertas)"])
 
 # ================================================================ RESUMEN
 with tab_res:
     st.subheader(f"Resumen {periodo}")
+    if venta_dia:
+        st.markdown("##### Venta y cortes")
+        c = st.columns(5)
+        c[0].metric("Venta total", fmt_num(venta_dia["venta"]),
+                    help=" · ".join(f"{k}: {fmt_num(v)}" for k, v in venta_dia["por_tipo"].items()))
+        c[1].metric("Pickeado (manual + pallet)", fmt_num(venta_dia["pickeado"]))
+        if venta_dia["hay_cortados"]:
+            c[2].metric("Pedidos cortados", fmt_num(venta_dia["cortado"]),
+                        f"{venta_dia['pedidos_cortados']} pedidos", delta_color="off")
+            c[3].metric("Nivel de servicio",
+                        f"{1 - venta_dia['cortado'] / venta_dia['venta']:.2%}" if venta_dia["venta"] else "-")
+            c[4].metric("Diferencia", fmt_num(venta_dia["diferencia"]),
+                        help="Venta - pickeado - cortado.")
+        else:
+            c[2].metric("Pedidos cortados", "-", help="Falta el archivo PEDIDOS_CORTADOS.")
     hh = turnos["horas_hombre"].sum()
     h_ef = turnos["min_manual"].sum() / 60
     cajas = turnos["cajas_manual"].sum()
